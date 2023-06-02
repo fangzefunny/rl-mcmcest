@@ -58,7 +58,7 @@ class rl:
         
         return pd.DataFrame.from_dict(data)
     
-    def model(self, data):
+    def scan_model(self, data):
 
         # load parameter 
         alpha = npyro.sample('alpha', dist.Normal(.4, .5))
@@ -76,9 +76,9 @@ class rl:
 
             # update 
             rpe = r - q[s, a]
-            q = q.at[s, a].set(q[s,a]+alpha*rpe)
+            q = q.at[s, a].set(q[s, a]+alpha*rpe)
 
-            return q, a_hat 
+            return q, q[0, :].copy()
         
         # input 
         q0 = jnp.zeros([self.nS, self.nA])
@@ -89,13 +89,41 @@ class rl:
 
         q, a_hat = scan(q_update, q0, (s, a, r), length=T)
 
-    def sample(self, data, seed=1234, n_samples=20000, n_warmup=50000):
+    def loop_model(self, data):
+
+        # load parameter 
+        alpha = npyro.sample('alpha', dist.Normal(.4, .5))
+        beta  = npyro.sample('beta',  dist.Normal( 1, .5))
+
+        # init 
+        q = jnp.zeros([self.nS, self.nA])
+        probs = jnp.zeros([data.shape[0]])
+
+        for t, row in data.iterrows():
+
+            # forward
+            s = row['s']
+            f = beta*q[s, :]
+            p = jnp.exp(f - jnp.log(jnp.exp(f).sum()))[1]
+            probs = probs.at[t].set(p)
+
+            # backward
+            a = row['a']
+            r = row['r']
+            rpe = r - q[s, a]
+            q = q.at[s, a].set(q[s, a] + alpha*rpe)
+        
+        npyro.sample('pi', dist.Bernoulli(probs=probs), 
+                     obs=data['a'].values)
+
+
+    def sample(self, data, mode='scan', seed=1234, n_samples=20000, n_warmup=50000):
 
         # set the random key 
         rng_key = jax.random.PRNGKey(seed)
 
         # sampling 
-        kernel = NUTS(self.model)
+        kernel = NUTS(eval(f'self.{mode}_model'))
         posterior = MCMC(kernel, num_chains=4,
                                  num_samples=n_samples,
                                  num_warmup=n_warmup)
@@ -113,4 +141,4 @@ if __name__ == '__main__':
     sim_data = rl(2, 2).sim(opt_param)
 
     agent = rl(2, 2)
-    agent.sample(sim_data)
+    agent.sample(sim_data, mode='loop')
