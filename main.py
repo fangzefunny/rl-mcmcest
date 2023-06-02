@@ -3,6 +3,7 @@ import numpy as np
 import jax.numpy as jnp
 import pandas as pd 
 
+import time 
 import jax
 import numpyro as npyro
 import numpyro.distributions as dist
@@ -87,7 +88,7 @@ class rl:
         r = data['r'].values
         T = len(r)
 
-        q, a_hat = scan(q_update, q0, (s, a, r), length=T)
+        q, q_info = scan(q_update, q0, (s, a, r), length=T)
 
     def loop_model(self, data):
 
@@ -117,28 +118,32 @@ class rl:
                      obs=data['a'].values)
 
 
-    def sample(self, data, mode='scan', seed=1234, n_samples=20000, n_warmup=50000):
+    def sample(self, data, mode='scan', seed=1234, 
+                    n_samples=20000, n_warmup=50000):
 
         # set the random key 
         rng_key = jax.random.PRNGKey(seed)
 
         # sampling 
+        start_time = time.time()
         kernel = NUTS(eval(f'self.{mode}_model'))
         posterior = MCMC(kernel, num_chains=4,
                                  num_samples=n_samples,
                                  num_warmup=n_warmup)
         posterior.run(rng_key, data)
         samples = posterior.get_samples()
-
-        with open('data/rlq.pkl', 'wb')as handle:
+        posterior.print_summary()
+        end_time = time.time()
+        print(f'Sampling takes {end_time - start_time:2f}s')
+    
+        with open(f'data/rlq_{mode}.pkl', 'wb')as handle:
             pickle.dump(samples, handle)
-
 
 if __name__ == '__main__':
 
     npyro.set_host_device_count(4)
-    opt_param = [.1, 5]
+    opt_param = [.25, 3]
     sim_data = rl(2, 2).sim(opt_param)
 
     agent = rl(2, 2)
-    agent.sample(sim_data, mode='loop')
+    agent.sample(sim_data, mode='scan')
