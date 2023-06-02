@@ -89,23 +89,6 @@ class rl:
 
         q, a_hat = scan(q_update, q0, (s, a, r), length=T)
 
-
-        # for _, row in data.iterrows():
-
-        #     # predict
-        #     s = row['s']
-        #     f = beta*self.q[s, :]
-        #     p = jnp.exp(f - jnp.log(jnp.exp(f).sum()))[1]
-        #     probs.append(p)
-
-            
-
-        # ps = jnp.concatenate(probs, axis=1)
-
-        # npyro.sample('pi', dist.Bernoulli(probs=ps), 
-        #              obs=data['a'].values)
-        
-
     def sample(self, data, seed=1234, n_samples=20000, n_warmup=50000):
 
         # set the random key 
