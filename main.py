@@ -61,34 +61,37 @@ class rl:
     
     def scan_model(self, data):
 
-        # load parameter 
-        alpha = npyro.sample('alpha', dist.Normal(.4, .5))
-        beta  = npyro.sample('beta',  dist.Normal( 1, .5))
-
         def q_update(q, sar):
 
             # upack 
-            s, a, r = sar
+            s, a, r, alpha, beta = sar
 
             # forward  
             f = beta*q[s, :]
             p = jnp.exp(f - jnp.log(jnp.exp(f).sum()))[1]
-            a_hat = npyro.sample('a_hat', dist.Bernoulli(probs=p), obs=a)
 
             # update 
             rpe = r - q[s, a]
             q = q.at[s, a].set(q[s, a]+alpha*rpe)
 
-            return q, q[0, :].copy()
+            return q, p
+        
+        # get subject list 
+        sub_lst = data['sub_id'].unique()
         
         # input 
-        q0 = jnp.zeros([self.nS, self.nA])
-        s = data['s'].values
-        a = data['a'].values
-        r = data['r'].values
-        T = len(r)
-
-        q, q_info = scan(q_update, q0, (s, a, r), length=T)
+        for sub_id in sub_lst:
+            alpha0 = npyro.sample(f'alpha_{sub_id}', dist.Normal(.4, .5))
+            beta0  = npyro.sample(f'beta_{sub_id}',  dist.Normal( 1, .5))
+            q0 = jnp.zeros([self.nS, self.nA])
+            s = data.query(f'sub_id=={sub_id}')['s'].values
+            a = data.query(f'sub_id=={sub_id}')['a'].values
+            r = data.query(f'sub_id=={sub_id}')['r'].values
+            T = len(r)
+            alpha = alpha0 * jnp.ones([T,]) 
+            beta  = beta0 * jnp.ones([T,]) 
+            q, probs = scan(q_update, q0, (s, a, r, alpha, beta), length=T)
+            npyro.sample(f'a_hat_{sub_id}', dist.Bernoulli(probs=probs), obs=a)
 
     def loop_model(self, data):
 
@@ -141,9 +144,18 @@ class rl:
 
 if __name__ == '__main__':
 
-    npyro.set_host_device_count(4)
-    opt_param = [.25, 3]
-    sim_data = rl(2, 2).sim(opt_param)
+    # generate data 
+    opt_params = [[.25, 3], [.1, 1], [1, 2]]
+    sim_data = []
 
+    for sub_id, opt_param in enumerate(opt_params):
+        sim_datum = rl(2, 2).sim(opt_param)
+        sim_datum['sub_id'] = sub_id
+        sim_data.append(sim_datum)
+
+    sim_data = pd.concat(sim_data, axis=0)
+
+    # start sampling
+    npyro.set_host_device_count(4)
     agent = rl(2, 2)
     agent.sample(sim_data, mode='scan')
