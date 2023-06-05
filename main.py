@@ -8,6 +8,7 @@ import jax
 import numpyro as npyro
 import numpyro.distributions as dist
 from numpyro.infer import NUTS, MCMC
+from numpyro.infer.reparam import TransformReparam
 from numpyro.contrib.control_flow import scan 
 
 
@@ -78,18 +79,29 @@ class rl:
         
         # get subject list 
         sub_lst = data['sub_id'].unique()
-        
+        n_sub  = len(sub_lst)
+        a_mu   = npyro.sample(f'alpha_mu', dist.Normal(.4, .5))
+        a_sig  = npyro.sample(f'alpha_sig', dist.HalfNormal(.5))
+        b_mu   = npyro.sample(f'beta_mu', dist.Normal(1, .5))
+        b_sig  = npyro.sample(f'beta_sig', dist.HalfNormal(.5))
+        with npyro.plate('sub_id', n_sub):
+            with npyro.handlers.reparam(config={'alpha': TransformReparam(), 
+                                                'beta': TransformReparam()}):
+                alpha0 = npyro.sample(
+                    'alpha', dist.TransformedDistribution(dist.Normal(0., 1.),
+                             dist.transforms.AffineTransform(a_mu, a_sig)))
+                beta0  = npyro.sample(
+                    'beta', dist.TransformedDistribution(dist.Normal(0., 1.),
+                             dist.transforms.AffineTransform(b_mu, b_sig)))
         # input 
-        for sub_id in sub_lst:
-            alpha0 = npyro.sample(f'alpha_{sub_id}', dist.Normal(.4, .5))
-            beta0  = npyro.sample(f'beta_{sub_id}',  dist.Normal( 1, .5))
+        for i, sub_id in enumerate(sub_lst):
             q0 = jnp.zeros([self.nS, self.nA])
             s = data.query(f'sub_id=={sub_id}')['s'].values
             a = data.query(f'sub_id=={sub_id}')['a'].values
             r = data.query(f'sub_id=={sub_id}')['r'].values
             T = len(r)
-            alpha = alpha0 * jnp.ones([T,]) 
-            beta  = beta0 * jnp.ones([T,]) 
+            alpha = alpha0[i] * jnp.ones([T,]) 
+            beta  = beta0[i] * jnp.ones([T,]) 
             q, probs = scan(q_update, q0, (s, a, r, alpha, beta), length=T)
             npyro.sample(f'a_hat_{sub_id}', dist.Bernoulli(probs=probs), obs=a)
 
@@ -145,7 +157,7 @@ class rl:
 if __name__ == '__main__':
 
     # generate data 
-    opt_params = [[.25, 3], [.1, 1], [1, 2]]
+    opt_params = [[.25, 3], [.1, 1], [.7, 2]]
     sim_data = []
 
     for sub_id, opt_param in enumerate(opt_params):
