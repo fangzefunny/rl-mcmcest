@@ -5,6 +5,7 @@ import pandas as pd
 
 import time 
 import jax
+from jax import vmap
 import numpyro as npyro
 import numpyro.distributions as dist
 from numpyro.infer import NUTS, MCMC
@@ -60,12 +61,60 @@ class rl:
         
         return pd.DataFrame.from_dict(data)
     
-    def scan_model(self, data):
+    def vmap_model(self, data):
 
-        def q_update(q, sar):
+        def q_update(q, info):
 
             # upack 
-            s, a, r, alpha, beta = sar
+            s, a, r, alpha, beta = info
+
+            # forward  
+            f = beta*q[s, :]
+            p = jnp.exp(f - jnp.log(jnp.exp(f).sum()))[1]
+
+            # update 
+            rpe = r - q[s, a]
+            q = q.at[s, a].set(q[s, a]+alpha*rpe)
+
+            return q, p
+        
+        def run_subj(alpha0, beta0, s, a, r):
+            q0 = jnp.zeros([self.nS, self.nA])
+            T = len(r)
+            alpha = alpha0 * jnp.ones([T,]) 
+            beta  = beta0 * jnp.ones([T,]) 
+            q, probs = scan(q_update, q0, (s, a, r, alpha, beta), length=T)
+            return probs
+        
+        # get subject list 
+        sub_lst = data['sub_id'].unique()
+        n_sub  = len(sub_lst)
+        s = jnp.vstack([data.query(f'sub_id=={sub_id}')['s'].values for sub_id in sub_lst])
+        a = jnp.vstack([data.query(f'sub_id=={sub_id}')['a'].values for sub_id in sub_lst])
+        r = jnp.vstack([data.query(f'sub_id=={sub_id}')['r'].values for sub_id in sub_lst])
+        a_mu   = npyro.sample(f'alpha_mu', dist.Normal(.4, .5))
+        a_sig  = npyro.sample(f'alpha_sig', dist.HalfNormal(.5))
+        b_mu   = npyro.sample(f'beta_mu', dist.Normal(1, .5))
+        b_sig  = npyro.sample(f'beta_sig', dist.HalfNormal(.5))
+        with npyro.plate('sub_id', n_sub):
+            with npyro.handlers.reparam(config={'alpha': TransformReparam(), 
+                                                'beta': TransformReparam()}):
+                alpha = npyro.sample(
+                    'alpha', dist.TransformedDistribution(dist.Normal(0., 1.),
+                             dist.transforms.AffineTransform(a_mu, a_sig)))
+                beta  = npyro.sample(
+                    'beta', dist.TransformedDistribution(dist.Normal(0., 1.),
+                             dist.transforms.AffineTransform(b_mu, b_sig)))
+
+        probs = vmap(run_subj)(alpha, beta, s, a, r)
+        npyro.sample(f'a_hat', dist.Bernoulli(probs=probs), obs=a)
+
+    def loop_model(self, data):
+
+        def q_update(q, info):
+
+            # upack 
+            s, a, r, alpha, beta = info
 
             # forward  
             f = beta*q[s, :]
@@ -105,36 +154,9 @@ class rl:
             q, probs = scan(q_update, q0, (s, a, r, alpha, beta), length=T)
             npyro.sample(f'a_hat_{sub_id}', dist.Bernoulli(probs=probs), obs=a)
 
-    def loop_model(self, data):
 
-        # load parameter 
-        alpha = npyro.sample('alpha', dist.Normal(.4, .5))
-        beta  = npyro.sample('beta',  dist.Normal( 1, .5))
-
-        # init 
-        q = jnp.zeros([self.nS, self.nA])
-        probs = jnp.zeros([data.shape[0]])
-
-        for t, row in data.iterrows():
-
-            # forward
-            s = row['s']
-            f = beta*q[s, :]
-            p = jnp.exp(f - jnp.log(jnp.exp(f).sum()))[1]
-            probs = probs.at[t].set(p)
-
-            # backward
-            a = row['a']
-            r = row['r']
-            rpe = r - q[s, a]
-            q = q.at[s, a].set(q[s, a] + alpha*rpe)
-        
-        npyro.sample('pi', dist.Bernoulli(probs=probs), 
-                     obs=data['a'].values)
-
-
-    def sample(self, data, mode='scan', seed=1234, 
-                    n_samples=20000, n_warmup=50000):
+    def sample(self, data, mode='loop', seed=1234, 
+                    n_samples=50000, n_warmup=100000):
 
         # set the random key 
         rng_key = jax.random.PRNGKey(seed)
@@ -170,4 +192,4 @@ if __name__ == '__main__':
     # start sampling
     npyro.set_host_device_count(4)
     agent = rl(2, 2)
-    agent.sample(sim_data, mode='scan')
+    agent.sample(sim_data, mode='loop')
