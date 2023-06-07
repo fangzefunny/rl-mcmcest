@@ -1,3 +1,4 @@
+import os 
 import pickle
 import numpy as np
 import jax.numpy as jnp
@@ -172,7 +173,8 @@ class rl:
         posterior.print_summary()
         end_time = time.time()
         print(f'Sampling takes {end_time - start_time:2f}s')
-    
+
+        if not os.path.exists(d): os.mkdir(d)
         with open(f'data/rlq_{mode}.pkl', 'wb')as handle:
             pickle.dump(samples, handle)
 
