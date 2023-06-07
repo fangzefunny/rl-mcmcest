@@ -174,7 +174,7 @@ class rl:
         end_time = time.time()
         print(f'Sampling takes {end_time - start_time:2f}s')
 
-        if not os.path.exists(d): os.mkdir(d)
+        if not os.path.exists('data'): os.mkdir('data')
         with open(f'data/rlq_{mode}.pkl', 'wb')as handle:
             pickle.dump(samples, handle)
 
